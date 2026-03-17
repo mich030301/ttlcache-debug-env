@@ -18,3 +18,13 @@ class TTLCache:
 
     def set(self, key: Hashable, value: Any) -> None:
         self._data[key] = value
+
+    def delete(self, key: Hashable) -> bool:
+        """Remove *key*. Returns True if it was present."""
+        return self._data.pop(key, _MISSING) is not _MISSING
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
