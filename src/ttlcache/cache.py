@@ -1,27 +1,47 @@
-"""A small in-memory cache."""
+"""An in-memory LRU cache."""
 
 from __future__ import annotations
 
-from typing import Any, Hashable
+from collections import OrderedDict
+from typing import Any, Callable, Hashable, Optional
+
+from .errors import InvalidCapacityError
 
 _MISSING = object()
 
+EvictCallback = Callable[[Hashable, Any, str], None]
+
 
 class TTLCache:
-    """In-memory key/value cache."""
+    """Bounded in-memory key/value cache with least-recently-used eviction."""
 
-    def __init__(self) -> None:
-        self._data: dict[Hashable, Any] = {}
+    def __init__(self, capacity: int = 128, on_evict: Optional[EvictCallback] = None) -> None:
+        if capacity <= 0:
+            raise InvalidCapacityError(capacity)
+        self.capacity = capacity
+        self._on_evict = on_evict
+        self._data: OrderedDict[Hashable, Any] = OrderedDict()
 
     def get(self, key: Hashable, default: Any = None) -> Any:
-        return self._data.get(key, default)
+        if key in self._data:
+            self._data.move_to_end(key)
+            return self._data[key]
+        return default
 
     def set(self, key: Hashable, value: Any) -> None:
+        if len(self._data) >= self.capacity:
+            self._evict_one()
         self._data[key] = value
+        self._data.move_to_end(key)
 
     def delete(self, key: Hashable) -> bool:
         """Remove *key*. Returns True if it was present."""
         return self._data.pop(key, _MISSING) is not _MISSING
+
+    def _evict_one(self) -> None:
+        key, value = self._data.popitem(last=False)
+        if self._on_evict is not None:
+            self._on_evict(key, value, "capacity")
 
     def __len__(self) -> int:
         return len(self._data)
