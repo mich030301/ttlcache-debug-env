@@ -6,6 +6,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Hashable, Optional
 
 from .errors import InvalidCapacityError
+from .stats import CacheStats
 
 _MISSING = object()
 
@@ -21,11 +22,14 @@ class TTLCache:
         self.capacity = capacity
         self._on_evict = on_evict
         self._data: OrderedDict[Hashable, Any] = OrderedDict()
+        self.stats = CacheStats()
 
     def get(self, key: Hashable, default: Any = None) -> Any:
         if key in self._data:
             self._data.move_to_end(key)
+            self.stats.hits += 1
             return self._data[key]
+        self.stats.misses += 1
         return default
 
     def set(self, key: Hashable, value: Any) -> None:
@@ -40,6 +44,7 @@ class TTLCache:
 
     def _evict_one(self) -> None:
         key, value = self._data.popitem(last=False)
+        self.stats.evictions += 1
         if self._on_evict is not None:
             self._on_evict(key, value, "capacity")
 
