@@ -36,6 +36,16 @@ def test_overwrite_is_not_an_eviction():
     assert c.stats.evictions == 0
 
 
+def test_expired_lookup_counts_as_a_miss(clock):
+    c = TTLCache(ttl=5, clock=clock)
+    c.set("a", 1)
+    clock.advance(6)
+    assert c.get("a") is None
+    assert c.stats.hits == 0
+    assert c.stats.misses == 1
+    assert c.stats.expirations == 1
+
+
 def test_reset():
     c = TTLCache()
     c.set("a", 1)
