@@ -93,3 +93,26 @@ class TTLCache:
 
     def __contains__(self, key: object) -> bool:
         return key in self._data
+
+    def peek(self, key: Hashable, default: Any = None) -> Any:
+        """Read a value without touching recency or statistics."""
+        entry = self._data.get(key)
+        if entry is None or self._is_expired(entry[1]):
+            return default
+        return entry[0]
+
+    def clear(self) -> None:
+        """Drop every entry. No callbacks fire and stats are untouched."""
+        self._data.clear()
+
+    def purge_expired(self) -> int:
+        """Eagerly remove expired entries and return how many were removed."""
+        removed = 0
+        for key in list(self._data):
+            value, expires_at = self._data[key]
+            if self._is_expired(expires_at):
+                del self._data[key]
+                self.stats.expirations += 1
+                self._notify(key, value, "expired")
+                removed += 1
+        return removed
