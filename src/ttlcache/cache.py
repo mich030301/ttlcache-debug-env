@@ -116,3 +116,15 @@ class TTLCache:
                 self._notify(key, value, "expired")
                 removed += 1
         return removed
+
+    def get_or_set(self, key: Hashable, factory: Callable[[], Any], ttl: Optional[float] = None) -> Any:
+        """Return the cached value, computing it with *factory* on a miss.
+
+        ``factory`` must be called at most once per missing key, even when many
+        threads ask for the same key concurrently.
+        """
+        value = self.get(key, _MISSING)
+        if value is _MISSING:
+            value = factory()
+            self.set(key, value, ttl)
+        return value
