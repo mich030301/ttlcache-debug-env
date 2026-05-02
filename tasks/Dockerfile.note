@@ -1,0 +1,5 @@
+Build and run the environment:
+
+    docker build -t ttlcache-debug-env .
+    docker run --rm ttlcache-debug-env            # expected to FAIL until fixed
+    docker run --rm -it ttlcache-debug-env bash   # work inside the container
