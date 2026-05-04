@@ -1,0 +1,154 @@
+diff --git a/src/ttlcache/cache.py b/src/ttlcache/cache.py
+index 8a10c61..bb1da6f 100644
+--- a/src/ttlcache/cache.py
++++ b/src/ttlcache/cache.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import threading
+ from collections import OrderedDict
+ from typing import Any, Callable, Hashable, Optional
+ 
+@@ -20,6 +21,10 @@ class TTLCache:
+     Entries are stored as ``(value, expires_at)`` where ``expires_at`` is an
+     absolute reading of the injected clock, or ``None`` for "never expires".
+     Expired entries are removed lazily on access (or via ``purge_expired``).
++
++    All public methods are thread-safe. A single re-entrant lock guards the
++    data and the statistics; ``get_or_set`` holds it while the factory runs so
++    the factory executes at most once per missing key.
+     """
+ 
+     def __init__(
+@@ -37,6 +42,7 @@ class TTLCache:
+         self.default_ttl = ttl
+         self._clock = clock
+         self._on_evict = on_evict
++        self._lock = threading.RLock()
+         self._data: OrderedDict[Hashable, tuple[Any, Optional[float]]] = OrderedDict()
+         self.stats = CacheStats()
+ 
+@@ -50,33 +56,38 @@ class TTLCache:
+         return self._clock() + effective
+ 
+     def _is_expired(self, expires_at: Optional[float]) -> bool:
+-        return expires_at is not None and self._clock() > expires_at
++        return expires_at is not None and self._clock() >= expires_at
+ 
+     # -- public API ------------------------------------------------------
+     def get(self, key: Hashable, default: Any = None) -> Any:
+-        if key in self._data:
+-            value, expires_at = self._data[key]
+-            self._data.move_to_end(key)
+-            self.stats.hits += 1
++        with self._lock:
++            entry = self._data.get(key)
++            if entry is None:
++                self.stats.misses += 1
++                return default
++            value, expires_at = entry
+             if self._is_expired(expires_at):
+                 del self._data[key]
++                self.stats.misses += 1
+                 self.stats.expirations += 1
+                 self._notify(key, value, "expired")
+                 return default
++            self._data.move_to_end(key)
++            self.stats.hits += 1
+             return value
+-        self.stats.misses += 1
+-        return default
+ 
+     def set(self, key: Hashable, value: Any, ttl: Optional[float] = None) -> None:
+-        expires_at = self._expires_at(ttl)
+-        if len(self._data) >= self.capacity:
+-            self._evict_one()
+-        self._data[key] = (value, expires_at)
+-        self._data.move_to_end(key)
++        with self._lock:
++            expires_at = self._expires_at(ttl)
++            if key not in self._data and len(self._data) >= self.capacity:
++                self._evict_one()
++            self._data[key] = (value, expires_at)
++            self._data.move_to_end(key)
+ 
+     def delete(self, key: Hashable) -> bool:
+         """Remove *key*. Returns True if it was present."""
+-        return self._data.pop(key, _MISSING) is not _MISSING
++        with self._lock:
++            return self._data.pop(key, _MISSING) is not _MISSING
+ 
+     # -- internals -------------------------------------------------------
+     def _notify(self, key: Hashable, value: Any, reason: str) -> None:
+@@ -89,33 +100,39 @@ class TTLCache:
+         self._notify(key, value, "capacity")
+ 
+     def __len__(self) -> int:
+-        return len(self._data)
++        with self._lock:
++            return len(self._data)
+ 
+     def __contains__(self, key: object) -> bool:
+-        return key in self._data
++        with self._lock:
++            entry = self._data.get(key)
++            return entry is not None and not self._is_expired(entry[1])
+ 
+     def peek(self, key: Hashable, default: Any = None) -> Any:
+         """Read a value without touching recency or statistics."""
+-        entry = self._data.get(key)
+-        if entry is None or self._is_expired(entry[1]):
+-            return default
+-        return entry[0]
++        with self._lock:
++            entry = self._data.get(key)
++            if entry is None or self._is_expired(entry[1]):
++                return default
++            return entry[0]
+ 
+     def clear(self) -> None:
+         """Drop every entry. No callbacks fire and stats are untouched."""
+-        self._data.clear()
++        with self._lock:
++            self._data.clear()
+ 
+     def purge_expired(self) -> int:
+         """Eagerly remove expired entries and return how many were removed."""
+-        removed = 0
+-        for key in list(self._data):
+-            value, expires_at = self._data[key]
+-            if self._is_expired(expires_at):
+-                del self._data[key]
+-                self.stats.expirations += 1
+-                self._notify(key, value, "expired")
+-                removed += 1
+-        return removed
++        with self._lock:
++            removed = 0
++            for key in list(self._data):
++                value, expires_at = self._data[key]
++                if self._is_expired(expires_at):
++                    del self._data[key]
++                    self.stats.expirations += 1
++                    self._notify(key, value, "expired")
++                    removed += 1
++            return removed
+ 
+     def get_or_set(self, key: Hashable, factory: Callable[[], Any], ttl: Optional[float] = None) -> Any:
+         """Return the cached value, computing it with *factory* on a miss.
+@@ -123,8 +140,9 @@ class TTLCache:
+         ``factory`` must be called at most once per missing key, even when many
+         threads ask for the same key concurrently.
+         """
+-        value = self.get(key, _MISSING)
+-        if value is _MISSING:
+-            value = factory()
+-            self.set(key, value, ttl)
+-        return value
++        with self._lock:
++            value = self.get(key, _MISSING)
++            if value is _MISSING:
++                value = factory()
++                self.set(key, value, ttl)
++            return value
