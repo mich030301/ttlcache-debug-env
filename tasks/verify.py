@@ -30,7 +30,7 @@ def tests_digest() -> str:
 
 def run_pytest() -> dict[str, int]:
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider"],
         cwd=ROOT,
         capture_output=True,
         text=True,
